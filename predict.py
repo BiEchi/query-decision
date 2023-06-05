@@ -10,21 +10,17 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from tqdm import tqdm
 tqdm.pandas()
 
-
-# In[2]:
-
-
 data = pd.read_csv('data/may_conversation_data.csv')
 
 
-# In[3]:
+# In[20]:
 
 
-conversations = data[['user_prompt', 'bot_response', 'conversation_id']]
+conversations = data[['user_prompt', 'bot_response', 'conversation_id', 'turn_id']]
 # dropna user_prompt
 conversations.dropna(subset=['user_prompt', 'bot_response'], inplace=True)
 # group using conversation_id, turn to list: ["user:", user_prompt1, "bot", bot_response1, "user:", user_prompt2, "bot", bot_response2, ...]
-conversations['user_prompt'] = conversations['user_prompt'].apply(lambda x: "user: " + str(x))
+conversations['user_prompt'] = conversations.apply(lambda x: "user: " + str(x['user_prompt']) + " $$$turn_id: " + str(x['turn_id']) + " $$$", axis=1)
 conversations['bot_response'] = conversations['bot_response'].apply(lambda x: "bot: " + str(x))
 conversations['turn'] = conversations['user_prompt'] + '\n' + conversations['bot_response']
 conversations = conversations.groupby('conversation_id')['turn'].apply(list)
@@ -35,7 +31,7 @@ conversations = conversations[conversations['turn'].apply(lambda x: len(x) > 2)]
 # all turns after the second turn constructs a conversation, e.g., if the conversation has [1, 2, 3, 4], then we have two conversations: [1, 2, 3] and [1, 2, 3, 4]
 turn_wise_conversations = []
 for i in range(len(conversations)):
-    for j in range(2, len(conversations.iloc[i]['turn'])):
+    for j in range(3, len(conversations.iloc[i]['turn']) + 1):
         turn_wise_conversation = conversations.iloc[i]['turn'][:j]
         turn_wise_conversations.append("\n".join(turn_wise_conversation))
 
@@ -44,18 +40,22 @@ df = pd.DataFrame(turn_wise_conversations, columns=['dialog'])
 # the dialog should end with user utterance, so we should delete the last bot utterance
 df['dialog'] = df['dialog'].apply(lambda x: x.split('\n')[:-1])
 df['dialog'] = df['dialog'].apply(lambda x: "\n".join(x))
+# take the turn id as a separate column
+df['turn_id'] = df['dialog'].apply(lambda x: x.split('$$$turn_id: ')[-1].split(' $$$')[0])
+# remove all turn id from the dialog in the form $$$turn_id: 8f41e1ba-f7c1-4d7b-8c81-6c14ea2b2cb4 $$$
+import re
+df['dialog'] = df['dialog'].apply(lambda x: re.sub('\$\$\$turn_id: .*?\$\$\$', '', x))
 
-df
+print(df.iloc[5]['dialog'])
 
 
-# In[4]:
+# In[18]:
 
 
-print(df.iloc[11]['dialog'])
 df.to_json('data/may_conversation_data_processed.jsonl', orient='records', lines=True)
 
 
-# In[5]:
+# In[4]:
 
 
 tokenizer = AutoTokenizer.from_pretrained("model/train_on_maybe_valid/")
@@ -65,7 +65,7 @@ PREFIX = "Does the context require to search something on the Internet: "
 POSTFIX = " __is-search-required__"
 
 
-# In[6]:
+# In[5]:
 
 
 def predict(input_id, decoder_input, model):
@@ -80,8 +80,8 @@ def predict(input_id, decoder_input, model):
 decoder_input = torch.tensor([0, 3, 834, 834, 26, 32, 18]).unsqueeze(0).to('cuda')
 
 flattened_convos = [
-    """bot:Hello, welcome to Alexa social bot. What do you want to chat? user:what is the weather like by you? bot:Its raining here :( so im indoors playing board games, what about you? user:what games are you playing bot:Im a big fan of chess and i sometimes play checkers, do you play a lot of board games? user:not a lot, but i do play checkers.  since you like chess have you watched the queens gamit on netflix? bot:How much do you play? and I havent watched it yet, do you know if its any good? user:i just started watching, it is phenomenal, and i dont know anything about chess bot:Ill definitely check it out then! Have you ever played much chess? user:no i have not, but i would love to learn.""",
-    """bot:Hello, welcome to Alexa social bot. What do you want to chat? user:Hoodies are my favorite type of clothing; I like how versatile they are. bot:I agree! my favorite brand of hoodies is the North Face Gordon Lyons Hoodie; this is currently on clearance sale at Macys  user:Oh wow, really? I should totally go to Macy's and get one! bot:Good for you; you can get it online also with free shipping user:That's awesome. Did you already get one? """,
+    """bot:Hello, welcome to Alexa social bot. What do you want to chat? user:what is the weather like by you? bot:Its raining here :( so im indoors playing board games, what about you? user:what games are you playing bot:Im a big fan of chess and i sometimes play checkers, do you play a lot of board games? user:not a lot, but i do play checkers.  since you like chess have you watched the queens gamit on netflix? bot:How much do you play? and I havent watched it yet, do you know if its any good? user:i just started watching, it is phenomenal, and i dont know anything about chess bot:Ill definitely check it out then! Have you ever played much chess? user:get me more info""",
+    """bot:Hello, welcome to Alexa social bot. What do you want to chat? user:Hoodies are my favorite type of clothing; I like how versatile they are. bot:I agree! my favorite brand of hoodies is the North Face Gordon Lyons Hoodie; this is currently on clearance sale at Macys  user:Oh wow, really? I should totally go to Macy's and get one! bot:Good for you; you can get it online also with free shipping user:would you  """,
     """bot:Hello, welcome to Alexa social bot. What do you want to chat? user:I went to the card shop today and picked up a pack of baseball cards. I ended up getting a rare Ken Griffey Jr! I can't wait to get a nice protective sleeve for it. bot:There are many rare Ken Griffey Jr cards one of the most rare would be  the 1989 Bowman Tiffany cards that were of a rare set of special factory print that only printed 6000 cards user:Wow! It would be quite something for me to own that card one day. It would be a prized possession to me. Do you watch baseball? bot:I do not watch baseball. Although baseball is really good for cardiovascular training.  user:That's too bad, I think baseball is fascinating with all its statistics. Do you train for anything in particular, a marathon perhaps? bot:I do not train for anything specific, I just feel that one should be healthy on the inside.  user:That's a good point. It's important to keep the mind and body sharp, but eating healthy is paramount too. What are you doing tonight? """
 ]
 
@@ -96,7 +96,7 @@ for flattened_convo in flattened_convos:
     print("=============")
 
 
-# In[10]:
+# In[6]:
 
 
 df['flattened'] = df['dialog'].apply(lambda x: x.replace("user:", "").replace("bot:", ""))
